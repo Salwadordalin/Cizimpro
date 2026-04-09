@@ -3,181 +3,264 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Antigravity Hologram Experience</title>
+    <title>TouchDesigner Simulasyon v0.1</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
 
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
-            overflow: hidden;
-            font-family: 'Courier New', Courier, monospace;
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 10; }
+        #loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; z-index: 20; }
+        
+        /* Videodaki TouchDesigner Alt Timeline Barı Simülasyonu */
+        #touchdesigner-ui {
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 50px;
+            background-color: #111; border-top: 1px solid #333; z-index: 30;
+            display: flex; align-items: center; color: #888; font-size: 11px; padding: 0 10px; box-sizing: border-box;
         }
-        canvas {
-            display: block;
-            position: absolute;
-            top: 0;
-            left: 0;
-            z-index: 10;
-        }
+        .ui-left { display: flex; gap: 15px; }
+        .ui-left span { color: #555; }
+        .ui-left span.active { color: #fff; }
+        .ui-timecode { color: #55aaff; font-size: 14px; margin-left: 100px; }
+        .ui-frame { color: #fff; font-size: 14px; margin-left: 20px; }
     </style>
 </head>
 <body>
+    <div id="loading">Sistem Yükleniyor...</div>
+    
+    <div id="touchdesigner-ui">
+        <div class="ui-left">
+            <span>Start 1</span>
+            <span>End 600</span>
+            <span>Beats 16.0</span>
+            <span>Tempo 120</span>
+            <span class="active">T Sig 4/4</span>
+            <span>FPS <span style="color:white">60.0</span></span>
+        </div>
+        <div class="ui-timecode">00:00:01:06</div>
+        <div class="ui-frame">66</div>
+    </div>
 
 <script>
-let hands, camera, capture;
-let detections = [];
-let particles = [];
-const NUM_PARTICLES = 80; 
-let rotationAngle = 0;
+let hands, faceMesh, camera, capture;
+let handDetections = [];
+let faceDetections = [];
+let particlesFace = [];
+let particlesHandR = [];
+const NUM_PARTICLES = 50; 
+let rotationAngleFace = 0;
+let rotationAngleHandR = 0;
+let frameCounter = 0;
 
 function setup() {
     createCanvas(windowWidth, windowHeight);
 
-    // 1. Kamerayı Başlat (Ön Kamera)
-    capture = createCapture({ 
-        video: { facingMode: "user" },
-        audio: false 
+    // 1. Kamerayı Başlat
+    capture = createCapture({ video: { facingMode: "user" } }, () => {
+        document.getElementById('loading').style.display = 'none';
     });
     capture.size(width, height);
     capture.hide();
 
     // 2. MediaPipe El Takibi
-    hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-    });
+    hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    hands.onResults(results => { handDetections = results.multiHandLandmarks; });
 
-    hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.6
-    });
+    // 3. MediaPipe Yüz Takibi
+    faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh.setOptions({ maxNumFaceMeshHands: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    faceMesh.onResults(results => { faceDetections = results.multiFaceMeshLandmarks; });
 
-    hands.onResults(results => { detections = results.multiHandLandmarks; });
-
+    // 4. MediaPipe Kamera Başlatma
     camera = new Camera(capture.elt, {
-        onFrame: async () => { await hands.send({ image: capture.elt }); },
+        onFrame: async () => { 
+            await hands.send({ image: capture.elt }); 
+            await faceMesh.send({ image: capture.elt });
+        },
         width: 640, height: 480
     });
     camera.start();
 
-    // 3. 3D Veri Parçacıkları Oluştur
-    for (let i = 0; i < NUM_PARTICLES; i++) {
-        let theta = random(TWO_PI);
-        let phi = acos(random(-1, 1));
-        let r = 110; 
-
-        particles.push({
-            x: r * sin(phi) * cos(theta),
-            y: r * sin(phi) * sin(theta),
-            z: r * cos(phi),
-            textVal: random(["0", "1", "X", "Y", "SYS", floor(random(10, 99))])
-        });
-    }
+    // 5. Parçacık Kürelerini Oluştur (Videodaki gibi koordinat dizileri)
+    createHologramSphere(particlesFace);
+    createHologramSphere(particlesHandR);
+    
     textAlign(CENTER, CENTER);
 }
 
-function draw() {
-    // Videodaki gibi sinematik koyu arka plan
-    image(capture, 0, 0, width, height);
-    background(0, 210); 
-
-    rotationAngle += 0.015; 
-
-    if (detections && detections.length > 0) {
-        
-        // Parmak uçlarını takip et
-        let p1 = detections[0][8]; // İlk el işaret parmağı
-        let cx = p1.x * width;
-        let cy = p1.y * height;
-        let scaleFactor = 1.0;
-
-        // İki el varsa büyüklüğü ve merkezi güncelle
-        if (detections.length > 1) {
-            let p2 = detections[1][8];
-            let x2 = p2.x * width;
-            let y2 = p2.y * height;
-            
-            cx = (cx + x2) / 2;
-            cy = (cy + y2) / 2;
-            let d = dist(p1.x * width, p1.y * height, x2, y2);
-            scaleFactor = map(d, 50, 600, 0.8, 3.5);
-
-            // Eller arası enerji hattı
-            stroke(255, 80);
-            strokeWeight(1);
-            drawingContext.setLineDash([5, 10]);
-            line(p1.x * width, p1.y * height, x2, y2);
-            drawingContext.setLineDash([]);
-        }
-
-        push();
-        translate(cx, cy);
-        scale(scaleFactor);
-
-        // Ana Oval Çerçeve
-        noFill();
-        stroke(255, 120);
-        strokeWeight(1);
-        ellipse(0, 0, 150, 220);
-
-        let projected = [];
-        for (let p of particles) {
-            // Y ekseni dönüşü
-            let rx = p.x * cos(rotationAngle) - p.z * sin(rotationAngle);
-            let rz = p.x * sin(rotationAngle) + p.z * cos(rotationAngle);
-            let ry = p.y;
-            let alpha = map(rz, -110, 110, 40, 255);
-            projected.push({ x: rx, y: ry, z: rz, a: alpha, t: p.textVal });
-        }
-
-        // Bağlantı çizgileri (Constellation)
-        for (let i = 0; i < projected.length; i++) {
-            for (let j = i + 1; j < projected.length; j++) {
-                let d = dist(projected[i].x, projected[i].y, projected[j].x, projected[j].y);
-                if (d < 50) {
-                    stroke(255, projected[i].a / 5);
-                    strokeWeight(0.5);
-                    line(projected[i].x, projected[i].y, projected[j].x, projected[j].y);
-                }
-            }
-        }
-
-        // Metin ve Noktalar
-        for (let p of projected) {
-            fill(255, p.a);
-            noStroke();
-            if (p.z > 20) {
-                textSize(9);
-                text(p.t, p.x, p.y);
-            } else {
-                circle(p.x, p.y, 1.5);
-            }
-        }
-        pop();
-
-        // Parmak uçlarına "L" veya Sabit Nokta Efekti
-        for (let hand of detections) {
-            let idx = hand[8];
-            let thm = hand[4];
-            fill(255);
-            circle(idx.x * width, idx.y * height, 5);
-            stroke(255, 150);
-            line(idx.x * width, idx.y * height, thm.x * width, thm.y * height);
-        }
+// Karmaşık sayı dizilerini içeren parçacık küresi
+function createHologramSphere(particleArray) {
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+        let theta = random(TWO_PI);
+        let phi = acos(random(-1, 1));
+        let r = 100; // Yarıçap
+        let textVal = "[" + floor(random(10000, 99999)) + ", " + floor(random(10000, 99999)) + "]";
+        particleArray.push({
+            x: r * sin(phi) * cos(theta),
+            y: r * sin(phi) * sin(theta),
+            z: r * cos(phi),
+            t: textVal
+        });
     }
 }
 
-function windowResized() {
-    resizeCanvas(windowWidth, windowHeight);
+function draw() {
+    image(capture, 0, 0, width, height);
+    background(0, 220); // Çok karanlık arka plan
+
+    rotationAngleFace += 0.01; 
+    rotationAngleHandR += 0.015; 
+    frameCounter++;
+
+    // --- HOLOGRAMLARI ÇİZ ---
+
+    // 1. Yüz Hologramı
+    if (faceDetections && faceDetections.length > 0) {
+        let noseTip = faceDetections[0][1]; // Yüzün merkezi
+        drawHologram(noseTip.x * width, noseTip.y * height, 1.0, rotationAngleFace, particlesFace);
+    }
+
+    // 2. El Hologramları ve Sol El Çerçevesi
+    if (handDetections && handDetections.length > 0) {
+        let handR = null;
+        let handL = null;
+
+        // Ellerin sağ/sol kontrolü (p5 ml5 mantığıyla)
+        for (let hand of handDetections) {
+            // Basitlik için sadece ilk algılananı kontrol ediyoruz
+            // Sağ El (Hologram Küresi)
+            if (hand[8].x > 0.5) { // Ekranın sağındaysa
+                handR = hand;
+            } else { // Solundaysa
+                handL = hand;
+            }
+        }
+
+        // Sağ El Hologramı
+        if (handR) {
+            let indexTipR = handR[8]; // İşaret parmağı ucu
+            drawHologram(indexTipR.x * width, indexTipR.y * height, 1.0, rotationAngleHandR, particlesHandR);
+        }
+
+        // Sol El Çerçevesi (Tıpa Tıp Kalın ve Parlak Çizgi)
+        if (handL) {
+            let thumbL = handL[4];
+            let indexTipL = handL[8];
+            
+            // Parlama efekti
+            drawingContext.shadowBlur = 30;
+            drawingContext.shadowColor = 'rgba(255, 255, 255, 1)';
+            
+            stroke(255);
+            strokeWeight(15); // Tıpa Tıp Kalın Çizgi
+            line(thumbL.x * width, thumbL.y * height, indexTipL.x * width, indexTipL.y * height);
+            
+            drawingContext.shadowBlur = 0; // Efekti sıfırla
+        }
+    }
+
+    // --- TRANSİENT ELEMANLARI ÇİZ ---
+
+    // 1. Sağdaki Sabit Instagram Yazısı
+    noStroke();
+    fill(255);
+    textSize(12);
+    text("@WXLL.HX", width - 80, height - 100);
+
+    // 2. Zamanla Hareket Eden Instagram Logosu (Tıpa Tıp Hareketi)
+    drawInstagramLogo();
 }
+
+// Hologram Küresi Çizim Fonksiyonu
+function drawHologram(cx, cy, scaleFactor, rotationAngle, particles) {
+    push();
+    translate(cx, cy);
+    scale(scaleFactor);
+
+    // Ana Oval Yörünge (Videodaki dikey çerçeve)
+    noFill();
+    stroke(255, 150);
+    strokeWeight(1.5);
+    // Tıpa Tıp Aşırı Parlaklık
+    drawingContext.shadowBlur = 15;
+    drawingContext.shadowColor = 'rgba(255, 255, 255, 1)';
+    ellipse(0, 0, 150, 220); // Dikey elips
+
+    let projected = [];
+    for (let p of particles) {
+        // Y ekseni dönüşü
+        let rx = p.x * cos(rotationAngle) - p.z * sin(rotationAngle);
+        let rz = p.x * sin(rotationAngle) + p.z * cos(rotationAngle);
+        let ry = p.y;
+        let alpha = map(rz, -110, 110, 40, 255);
+        projected.push({ x: rx, y: ry, z: rz, a: alpha, t: p.t });
+    }
+
+    // Parçacık Bağlantı Çizgileri
+    for (let i = 0; i < projected.length; i++) {
+        for (let j = i + 1; j < projected.length; j++) {
+            let d = dist(projected[i].x, projected[i].y, projected[j].x, projected[j].y);
+            if (d < 50) {
+                stroke(255, projected[i].a / 5);
+                strokeWeight(0.5);
+                line(projected[i].x, projected[i].y, projected[j].x, projected[j].y);
+            }
+        }
+    }
+
+    // Parçacık Metinleri ve Noktalar (Tıpa Tıp)
+    for (let p of projected) {
+        fill(255, p.a);
+        noStroke();
+        if (p.z > 20) { // Ön taraftakiler metin
+            textSize(9);
+            text(p.t, p.x, p.y);
+        } else { // Arka taraftakiler nokta
+            circle(p.x, p.y, 1.5);
+        }
+    }
+    pop();
+    drawingContext.shadowBlur = 0;
+}
+
+// Instagram Logosunu Simüle Eden Fonksiyon (Tıpa Tıp Hareket)
+function drawInstagramLogo() {
+    let logoSize = 40;
+    let logoX, logoY;
+
+    // Videodaki kare sayısına göre logonun konumu
+    if (frameCounter < 480) { // İlk kareler: Sağda sabit
+        logoX = width - 80;
+        logoY = height - 130;
+    } else if (frameCounter < 540) { // 16. kare civarı: Merkeze hareket
+        let ratio = map(frameCounter, 480, 540, 0, 1);
+        logoX = lerp(width - 80, width/2, ratio);
+        logoY = lerp(height - 130, height/2, ratio);
+    } else { // Son kareler: Merkezde ve kayboluyor (tıpa tıp değil, kaybolma eklendi)
+        logoX = width / 2;
+        logoY = height / 2;
+        logoSize = map(frameCounter, 540, 600, 40, 0); // Kaybolma
+    }
+
+    // Logonun dairesel arka planı
+    fill(255);
+    noStroke();
+    ellipse(logoX, logoY, logoSize + 10);
+    
+    // Logonun renkli kısmı (basit renklerle simüle edildi)
+    fill(200, 50, 200);
+    ellipse(logoX, logoY, logoSize);
+    fill(255);
+    ellipse(logoX, logoY, logoSize/2);
+    fill(200, 50, 200);
+    ellipse(logoX, logoY, logoSize/4);
+}
+
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
 </script>
 </body>
 </html>
